@@ -23,7 +23,7 @@ services:
       start_period: 30s
 
   # 로컬 개발 전용 Kafka(KRaft 단일 노드, Zookeeper 미사용).
-  # 앱은 localhost:9092 로 접속한다(application-dev.yml 연동은 별도 태스크에서 처리).
+  # 앱은 localhost:9092 로 접속한다(application-dev.yml의 spring.kafka.bootstrap-servers 기본값과 일치).
   kafka:
     image: apache/kafka:3.7.0
     container_name: coffee-order-kafka
