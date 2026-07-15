@@ -1,0 +1,26 @@
+# 로컬 개발 전용 docker-compose 설정.
+# 이 파일의 계정/비밀번호는 로컬 개발용 값이며 운영 환경에서 재사용하지 않는다.
+# application-dev.yml 기본값(coffee_order / coffee / coffee / 3306)과 일치시킴.
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: coffee-order-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: coffee_order
+      MYSQL_USER: coffee
+      MYSQL_PASSWORD: coffee
+      MYSQL_ROOT_PASSWORD: coffee-root
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pcoffee-root"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  mysql-data:
