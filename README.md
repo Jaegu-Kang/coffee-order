@@ -193,6 +193,27 @@ erDiagram
 
 로컬 인프라는 `docker-compose`(MySQL·Redis·Kafka)로 제공 예정.
 
+### 7.1 실행 전제조건 / 검증 절차
+
+- **빌드**: `./gradlew clean build` — 인프라(DB 등) 없이 성공해야 한다. 테스트는 H2(`test`
+  프로파일, `src/test/resources/application-test.yml`)로 동작하므로 MySQL이 없어도 통과한다.
+- **`./gradlew bootRun` (프로파일 미지정)**: `application.yml`의 `spring.profiles.default: dev`
+  에 의해 **dev 프로파일로 폴백**한다. dev는 MySQL을 사용하므로(`application-dev.yml`) 아래가
+  준비돼 있어야 정상 기동한다.
+  - 로컬 3306에 MySQL 구동
+  - `coffee_order` 데이터베이스 존재
+  - `coffee`/`coffee`(기본값, `DB_USERNAME`/`DB_PASSWORD` 환경변수로 오버라이드 가능) 계정과
+    해당 DB에 대한 접근 권한
+  - 위 조건 미충족 시 `Access denied for user 'coffee'@'localhost'` 또는 커넥션 실패로
+    기동이 실패한다 — **이는 환경 미준비이며 코드 결함이 아니다.**
+- **주의**: `./gradlew bootRun --args='--spring.profiles.active=test'`로 test 프로파일을 강제해
+  H2로 우회 기동하는 것은 **불가**하다. H2는 `testRuntimeOnly` 의존성이라 `bootRun`의 런타임
+  클래스패스에 없다(`Failed to determine a suitable driver class` 에러 발생). test 프로파일은
+  테스트 실행(`@ActiveProfiles("test")`) 전용이다.
+- **판별 기준**: L1(필수) — `./gradlew test`의 `contextLoads`가 통과하면 H2 기준 애플리케이션
+  컨텍스트(JPA/Kafka/validation 포함) 기동은 검증된 것으로 간주한다. L2(조건부) — 위 MySQL
+  전제조건이 갖춰진 환경에서만 `./gradlew bootRun`으로 dev 기동을 추가 확인한다.
+
 ---
 
 ## 8. 테스트 전략 (도전 요구사항 4)
