@@ -5,8 +5,9 @@ spring:
     password:
     driver-class-name: org.h2.Driver
   jpa:
-    # ddl-auto 전략은 E1-3(스키마/시드 스토리)에서 확정 예정. 잠정값으로 create-drop 사용.
+    # 스키마 생성 전략(E1-3) 확정: dev와 동일하게 Flyway(H2 MySQL 호환 모드)가 DDL을 소유하고
+    # Hibernate는 validate만 수행(프로파일 간 일관성 유지). 근거: docs/design/schema-strategy.md
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: validate
     open-in-view: false
     show-sql: true
