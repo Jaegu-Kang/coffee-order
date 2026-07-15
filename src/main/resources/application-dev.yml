@@ -5,8 +5,9 @@ spring:
     password: ${DB_PASSWORD:coffee}
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
-    # ddl-auto 전략은 E1-3(스키마/시드 스토리)에서 확정 예정. 잠정값으로 none 사용.
+    # 스키마 생성 전략(E1-3) 확정: Flyway가 DDL을 소유. Hibernate는 validate로 엔티티-스키마
+    # 매핑 불일치만 검증(스키마 변경 금지). 근거: docs/design/schema-strategy.md
     hibernate:
-      ddl-auto: none
+      ddl-auto: validate
     open-in-view: false
     show-sql: true
