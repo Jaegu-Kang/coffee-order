@@ -179,19 +179,35 @@ erDiagram
 
 ---
 
-## 7. 실행 방법 (구현 단계 예정)
-
-> 현재 리포지토리는 설계(0번)와 하네스 환경까지 구성된 상태다. 아래는 구현 완료 후 기준.
+## 7. 실행 방법
 
 ```bash
-# 의존성(구현 시 추가): spring-boot-starter-web, -data-jpa, -validation,
-#   -data-redis, spring-kafka, mysql-connector-j, (test) h2
 ./gradlew build
 ./gradlew test          # 동시성/일관성 테스트 포함
 ./gradlew bootRun
 ```
 
-로컬 인프라는 `docker-compose`(MySQL·Redis·Kafka)로 제공 예정.
+### 7.0 로컬 인프라 기동 (docker-compose)
+
+로컬 인프라(MySQL·Kafka)는 `docker-compose.yml`로 제공한다. Redis는 도전 요구사항(E6,
+분산락)에서 추가될 예정이며 현재 compose 구성에는 포함되어 있지 않다.
+
+1. **기동**: `docker compose up -d` — MySQL(3306), Kafka(9092, KRaft 단일 노드)가 백그라운드로
+   구동된다. 두 서비스 모두 `healthcheck`가 정의돼 있어 기동 직후에는 아직 "starting" 상태일 수
+   있다.
+2. **기동 확인**:
+   - `docker compose ps` — `STATUS` 컬럼이 두 서비스 모두 `healthy`가 될 때까지 대기(최초 기동
+     시 최대 `start_period`인 30초 정도 소요될 수 있다).
+   - MySQL 개별 확인: `docker compose exec mysql mysqladmin ping -h localhost -u root -pcoffee-root`
+   - Kafka 개별 확인: `docker compose exec kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092`
+3. **앱 연결**: `application-dev.yml`은 `docker-compose.yml`의 값과 일치하도록 기본값이 설정돼
+   있다(MySQL `localhost:3306` / `coffee_order` / `coffee`·`coffee`, Kafka
+   `localhost:9092`). 별도 설정 변경 없이 `./gradlew bootRun`(dev 프로파일, 7.1 참고)을 실행하면
+   두 인프라에 연결된다. 필요 시 `DB_HOST`/`DB_PORT`/`DB_NAME`/`DB_USERNAME`/`DB_PASSWORD`,
+   `KAFKA_HOST`/`KAFKA_PORT` 환경변수로 접속 정보를 오버라이드할 수 있다.
+4. **종료/정리**: `docker compose down` — 컨테이너만 제거되고 `mysql-data` 볼륨은 유지되어
+   데이터가 보존된다(다음 `up -d` 시 이전 데이터 그대로 사용). 데이터까지 완전히 초기화하려면
+   `docker compose down -v`로 볼륨을 함께 삭제한다.
 
 ### 7.1 실행 전제조건 / 검증 절차
 
@@ -206,6 +222,11 @@ erDiagram
     해당 DB에 대한 접근 권한
   - 위 조건 미충족 시 `Access denied for user 'coffee'@'localhost'` 또는 커넥션 실패로
     기동이 실패한다 — **이는 환경 미준비이며 코드 결함이 아니다.**
+  - 마찬가지로 로컬 9092에 Kafka(docker-compose)가 떠 있어야 한다. 브로커가 없거나 아직
+    healthy 상태가 아니면 프로듀서가 `Connection to node -1 could not be established` 또는
+    `Topic ... not present in metadata after ...ms` 타임아웃 로그를 반복 출력한다 — 이 역시
+    **환경 미준비이며 코드 결함이 아니다.** (`docker compose ps`로 Kafka가 `healthy`인지 먼저
+    확인한다.)
 - **주의**: `./gradlew bootRun --args='--spring.profiles.active=test'`로 test 프로파일을 강제해
   H2로 우회 기동하는 것은 **불가**하다. H2는 `testRuntimeOnly` 의존성이라 `bootRun`의 런타임
   클래스패스에 없다(`Failed to determine a suitable driver class` 에러 발생). test 프로파일은

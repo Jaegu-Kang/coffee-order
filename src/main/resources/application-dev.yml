@@ -11,3 +11,5 @@ spring:
       ddl-auto: validate
     open-in-view: false
     show-sql: true
+  kafka:
+    bootstrap-servers: ${KAFKA_HOST:localhost}:${KAFKA_PORT:9092}
