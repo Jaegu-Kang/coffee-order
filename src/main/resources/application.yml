@@ -1,3 +1,6 @@
 spring:
   application:
     name: coffee-order
+  profiles:
+    # 프로파일 미지정 시 폴백(활성화 강제 아님) — CLI/env의 --spring.profiles.active 오버라이드 가능.
+    default: dev
