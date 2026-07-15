@@ -1,0 +1,13 @@
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+.idea/
+*.iml
+out/
+.DS_Store
+
+# 하네스 기계장치는 이 리포에 두지 않는다(혹시 생겨도 무시)
+.claude/
+orchestration/
+logs/
+AGENTS.md
