@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:coffee_order;MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  jpa:
+    # ddl-auto 전략은 E1-3(스키마/시드 스토리)에서 확정 예정. 잠정값으로 create-drop 사용.
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+    show-sql: true
