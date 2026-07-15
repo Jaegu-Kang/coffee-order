@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:coffee_order}?serverTimezone=UTC&characterEncoding=UTF-8
+    username: ${DB_USERNAME:coffee}
+    password: ${DB_PASSWORD:coffee}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    # ddl-auto 전략은 E1-3(스키마/시드 스토리)에서 확정 예정. 잠정값으로 none 사용.
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+    show-sql: true
