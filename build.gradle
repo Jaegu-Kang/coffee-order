@@ -40,6 +40,9 @@ dependencies {
     // OrderEvent가 실제 Kafka 발행 시 사용할 직렬화 경로(JacksonUtils.enhancedObjectMapper())를 테스트에서
     // 동일하게 재현하기 위해 Jackson 2 + JavaTimeModule을 테스트 스코프에 한정해 추가한다(런타임/운영 코드는 미변경).
     testImplementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    // OrderService의 order-events 발행이 실제 Kafka 프로토콜 위에서 토픽명/JSON 스키마대로 나가는지
+    // 인메모리 브로커(EmbeddedKafka)로 검증하기 위해 추가한다(SCRUM-62 / E4-2 태스크4).
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testRuntimeOnly 'com.h2database:h2'
 }
