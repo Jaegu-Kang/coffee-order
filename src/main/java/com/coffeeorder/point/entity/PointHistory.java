@@ -5,6 +5,8 @@ import java.time.LocalDateTime;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -19,6 +21,11 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
  * 차감({@link #TYPE_USE})만 다루므로 문자열 상수로만 정의한다(충전(CHARGE) 로직은 별도 E3 티켓
  * 범위이며 과설계 방지를 위해 enum은 도입하지 않는다). {@code point_histories} 테이블에는
  * {@code updated_at} 컬럼이 없으므로 이 엔티티에는 감사 필드로 {@code createdAt}만 둔다.
+ * {@code userId}는 {@code users.id}를 참조하는 FK 컬럼이지만 {@code PointBalance}와 동일하게
+ * 연관관계 매핑 없이 단순 컬럼으로 유지한다(엔티티 그래프 로딩 부작용 방지). {@code createdAt}만
+ * {@link com.coffeeorder.config.JpaAuditingConfig}를 통해 자동 관리되며(docs/policy.md 감사 규칙),
+ * 이 테이블에는 {@code updated_at}이 존재하지 않는다(이력은 불변 기록이므로 갱신 없음).
+ * 잔액 증감 비즈니스 로직(충전/차감)은 이 엔티티의 범위가 아니다(후속 서브태스크에서 다룬다).
  */
 @Entity
 @Table(name = "point_histories")
@@ -34,6 +41,7 @@ public class PointHistory {
 	@Column(name = "user_id", nullable = false)
 	private Long userId;
 
+	@Enumerated(EnumType.STRING)
 	@Column(name = "type", nullable = false, length = 10)
 	private String type;
 

@@ -7,6 +7,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EntityListeners;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 
 import org.springframework.data.annotation.LastModifiedDate;
 import org.springframework.data.jpa.domain.support.AuditingEntityListener;
@@ -33,6 +34,7 @@ public class PointBalance {
 	@Column(name = "balance", nullable = false)
 	private Long balance;
 
+	@Version
 	@Column(name = "version", nullable = false)
 	private Long version;
 
@@ -72,5 +74,13 @@ public class PointBalance {
 
 	public LocalDateTime getUpdatedAt() {
 		return updatedAt;
+	}
+
+	/**
+	 * 잔액을 {@code amount}만큼 증가시킨다. 호출자(서비스 계층)가 이미 양수임을 검증한 금액만
+	 * 전달한다고 가정하며, 이 메서드는 음수/0에 대한 방어 검증을 중복 수행하지 않는다.
+	 */
+	public void charge(Long amount) {
+		this.balance += amount;
 	}
 }
