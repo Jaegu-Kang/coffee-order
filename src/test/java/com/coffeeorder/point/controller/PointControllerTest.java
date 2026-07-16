@@ -72,6 +72,15 @@ class PointControllerTest {
 	}
 
 	@Test
+	void charge_amount가_숫자가_아닌_형식이면_400_VALIDATION_ERROR를_응답한다() throws Exception {
+		mockMvc.perform(post("/api/points/charge")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{ \"userId\": 1, \"amount\": \"abc\" }"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+	}
+
+	@Test
 	void charge_존재하지_않는_사용자면_404_USER_NOT_FOUND를_응답한다() throws Exception {
 		when(pointService.charge(anyLong(), anyLong()))
 				.thenThrow(new BusinessException(ErrorCode.USER_NOT_FOUND));
