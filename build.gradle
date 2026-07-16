@@ -25,6 +25,11 @@ dependencies {
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springframework.boot:spring-boot-flyway'
     implementation 'org.flywaydb:flyway-core'
+    // KafkaProducerConfig가 order-events 발행에 사용하는 JsonSerializer/JacksonUtils.enhancedObjectMapper()는
+    // Jackson 2(com.fasterxml.jackson.databind)를 사용하지만, Spring Boot 4.1 기본 스타터는 Jackson 3만
+    // 가져온다(OrderEventTest의 동일한 설명 참고). orderedAt(Instant)을 "...Z" 문자열로 직렬화하려면
+    // JavaTimeModule이 필요하므로 운영 코드 경로에도 Jackson 2 jsr310 모듈을 명시적으로 추가한다(SCRUM-61).
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
     runtimeOnly 'org.flywaydb:flyway-mysql'
     runtimeOnly 'com.mysql:mysql-connector-j'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

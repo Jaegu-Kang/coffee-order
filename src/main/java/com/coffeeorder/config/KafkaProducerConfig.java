@@ -15,7 +15,11 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.support.JacksonUtils;
 import org.springframework.kafka.support.serializer.JsonSerializer;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 
 /**
  * Kafka Producer 인프라 설정(SCRUM-59 / E4-2 태스크1: "KafkaConfig/Producer 설정
@@ -90,6 +94,12 @@ public class KafkaProducerConfig {
 	/**
 	 * key는 문자열, value는 향후 OrderEvent 등 임의 객체를 담을 수 있도록 JSON 직렬화한다
 	 * (구체 타입은 태스크2에서 확정 예정이라 제네릭은 {@code Object}로 유지).
+	 * {@code KEY_SERIALIZER_CLASS_CONFIG}/{@code VALUE_SERIALIZER_CLASS_CONFIG} configs 항목은
+	 * (기존 테스트가 검증하므로) 그대로 두되, 실제 사용되는 {@link JsonSerializer} 인스턴스는
+	 * {@link JacksonUtils#enhancedObjectMapper()}에 {@code WRITE_DATES_AS_TIMESTAMPS}를 비활성화한
+	 * {@link ObjectMapper}로 교체해, {@code orderedAt} 같은 {@link java.time.Instant} 필드가
+	 * epoch 숫자가 아닌 docs/api/order.md 예시의 {@code "...Z"} ISO-8601 문자열로 직렬화되게 한다
+	 * (OrderEventTest의 직렬화 계약과 동일한 설정, SCRUM-61).
 	 */
 	@Bean
 	public ProducerFactory<String, Object> producerFactory() {
@@ -97,7 +107,11 @@ public class KafkaProducerConfig {
 		configs.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
 		configs.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		configs.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
-		return new DefaultKafkaProducerFactory<>(configs);
+
+		ObjectMapper orderEventObjectMapper = JacksonUtils.enhancedObjectMapper()
+				.configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
+		return new DefaultKafkaProducerFactory<>(configs, StringSerializer::new,
+				() -> new JsonSerializer<>(orderEventObjectMapper));
 	}
 
 	@Bean
