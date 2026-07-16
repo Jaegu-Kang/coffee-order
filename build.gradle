@@ -25,11 +25,24 @@ dependencies {
     implementation 'org.springframework.kafka:spring-kafka'
     implementation 'org.springframework.boot:spring-boot-flyway'
     implementation 'org.flywaydb:flyway-core'
+    // KafkaProducerConfig가 order-events 발행에 사용하는 JsonSerializer/JacksonUtils.enhancedObjectMapper()는
+    // Jackson 2(com.fasterxml.jackson.databind)를 사용하지만, Spring Boot 4.1 기본 스타터는 Jackson 3만
+    // 가져온다(OrderEventTest의 동일한 설명 참고). orderedAt(Instant)을 "...Z" 문자열로 직렬화하려면
+    // JavaTimeModule이 필요하므로 운영 코드 경로에도 Jackson 2 jsr310 모듈을 명시적으로 추가한다(SCRUM-61).
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
     runtimeOnly 'org.flywaydb:flyway-mysql'
     runtimeOnly 'com.mysql:mysql-connector-j'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.boot:spring-boot-webmvc-test'
     testImplementation 'org.springframework.boot:spring-boot-data-jpa-test'
+    // spring-kafka JsonSerializer/JacksonUtils.enhancedObjectMapper()는 Jackson 2(com.fasterxml.jackson.databind)를
+    // 사용하지만, Spring Boot 4.1 기본 스타터(spring-boot-starter-jackson)는 Jackson 3(tools.jackson)만 가져온다.
+    // OrderEvent가 실제 Kafka 발행 시 사용할 직렬화 경로(JacksonUtils.enhancedObjectMapper())를 테스트에서
+    // 동일하게 재현하기 위해 Jackson 2 + JavaTimeModule을 테스트 스코프에 한정해 추가한다(런타임/운영 코드는 미변경).
+    testImplementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    // OrderService의 order-events 발행이 실제 Kafka 프로토콜 위에서 토픽명/JSON 스키마대로 나가는지
+    // 인메모리 브로커(EmbeddedKafka)로 검증하기 위해 추가한다(SCRUM-62 / E4-2 태스크4).
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testRuntimeOnly 'com.h2database:h2'
 }

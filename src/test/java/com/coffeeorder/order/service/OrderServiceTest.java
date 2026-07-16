@@ -7,6 +7,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.ZoneOffset;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -14,16 +15,19 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coffeeorder.common.exception.BusinessException;
 import com.coffeeorder.common.exception.ErrorCode;
+import com.coffeeorder.config.KafkaProducerConfig;
 import com.coffeeorder.menu.entity.Menu;
 import com.coffeeorder.menu.repository.MenuRepository;
 import com.coffeeorder.order.dto.OrderCreateRequest;
 import com.coffeeorder.order.entity.Order;
 import com.coffeeorder.order.entity.OrderItem;
 import com.coffeeorder.order.entity.OrderStatus;
+import com.coffeeorder.order.event.OrderEvent;
 import com.coffeeorder.order.repository.OrderItemRepository;
 import com.coffeeorder.order.repository.OrderRepository;
 import com.coffeeorder.point.entity.PointBalance;
@@ -53,9 +57,12 @@ class OrderServiceTest {
 	@Mock
 	private PointHistoryRepository pointHistoryRepository;
 
+	@Mock
+	private KafkaTemplate<String, Object> kafkaTemplate;
+
 	private OrderService orderService() {
 		return new OrderService(orderRepository, orderItemRepository, userRepository, menuRepository,
-				pointBalanceRepository, pointHistoryRepository);
+				pointBalanceRepository, pointHistoryRepository, kafkaTemplate);
 	}
 
 	private Menu menu(Long id, String name, Long price) {
@@ -98,6 +105,18 @@ class OrderServiceTest {
 		assertThat(savedHistory.getType()).isEqualTo(PointHistory.TYPE_USE);
 		assertThat(savedHistory.getAmount()).isEqualTo(7000L);
 		assertThat(savedHistory.getBalanceAfter()).isEqualTo(3000L);
+
+		ArgumentCaptor<String> topicCaptor = ArgumentCaptor.forClass(String.class);
+		ArgumentCaptor<OrderEvent> eventCaptor = ArgumentCaptor.forClass(OrderEvent.class);
+		verify(kafkaTemplate).send(topicCaptor.capture(), eventCaptor.capture());
+		assertThat(topicCaptor.getValue()).isEqualTo(KafkaProducerConfig.ORDER_EVENTS_TOPIC);
+		OrderEvent orderEvent = eventCaptor.getValue();
+		assertThat(orderEvent.getOrderId()).isEqualTo(result.getOrder().getId());
+		assertThat(orderEvent.getUserId()).isEqualTo(result.getOrder().getUserId());
+		assertThat(orderEvent.getMenuId()).isEqualTo(result.getOrderItems().get(0).getMenuId());
+		assertThat(orderEvent.getAmount()).isEqualTo(result.getOrder().getTotalAmount());
+		assertThat(orderEvent.getOrderedAt())
+				.isEqualTo(result.getOrder().getOrderedAt().toInstant(ZoneOffset.UTC));
 	}
 
 	@Test
@@ -117,6 +136,17 @@ class OrderServiceTest {
 
 		assertThat(result.getOrder().getTotalAmount()).isEqualTo(3500L);
 		assertThat(result.getOrderItems().get(0).getQuantity()).isEqualTo(1);
+
+		ArgumentCaptor<String> topicCaptor = ArgumentCaptor.forClass(String.class);
+		ArgumentCaptor<OrderEvent> eventCaptor = ArgumentCaptor.forClass(OrderEvent.class);
+		verify(kafkaTemplate).send(topicCaptor.capture(), eventCaptor.capture());
+		assertThat(topicCaptor.getValue()).isEqualTo(KafkaProducerConfig.ORDER_EVENTS_TOPIC);
+		OrderEvent orderEvent = eventCaptor.getValue();
+		assertThat(orderEvent.getUserId()).isEqualTo(result.getOrder().getUserId());
+		assertThat(orderEvent.getMenuId()).isEqualTo(result.getOrderItems().get(0).getMenuId());
+		assertThat(orderEvent.getAmount()).isEqualTo(result.getOrder().getTotalAmount());
+		assertThat(orderEvent.getOrderedAt())
+				.isEqualTo(result.getOrder().getOrderedAt().toInstant(ZoneOffset.UTC));
 	}
 
 	@Test
@@ -132,6 +162,7 @@ class OrderServiceTest {
 
 		verify(menuRepository, never()).findById(any());
 		verify(orderRepository, never()).save(any());
+		verify(kafkaTemplate, never()).send(any(), any());
 	}
 
 	@Test
@@ -147,6 +178,7 @@ class OrderServiceTest {
 				.isEqualTo(ErrorCode.MENU_NOT_FOUND);
 
 		verify(orderRepository, never()).save(any());
+		verify(kafkaTemplate, never()).send(any(), any());
 	}
 
 	@Test
@@ -167,6 +199,7 @@ class OrderServiceTest {
 
 		verify(orderRepository, never()).save(any());
 		verify(pointHistoryRepository, never()).save(any());
+		verify(kafkaTemplate, never()).send(any(), any());
 	}
 
 	@Test
