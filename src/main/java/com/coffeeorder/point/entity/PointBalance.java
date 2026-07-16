@@ -48,7 +48,10 @@ public class PointBalance {
 	public PointBalance(Long userId, Long balance) {
 		this.userId = userId;
 		this.balance = balance;
-		this.version = 0L;
+	}
+
+	public PointBalance(Long userId) {
+		this(userId, 0L);
 	}
 
 	/**
@@ -57,7 +60,6 @@ public class PointBalance {
 	 */
 	public void deduct(Long amount) {
 		this.balance -= amount;
-		this.version += 1;
 	}
 
 	public Long getUserId() {
