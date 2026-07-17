@@ -171,4 +171,75 @@ class OrderItemRepositoryPopularMenuTest {
 		assertThat(result).extracting(PopularMenuCountProjection::getMenuId)
 				.doesNotContain(fourthMenuId);
 	}
+
+	@Test
+	void 서로_다른_4개_메뉴_중_2위부터_4위가_동점이면_menu_id_기준_상위_3개만_반환된다() {
+		LocalDateTime from = LocalDateTime.of(2026, 7, 9, 0, 0, 0);
+		Long fourthMenuId = insertMenu("바닐라라떼2", 4500L);
+
+		Order order1 = savePaidOrder(from.plusDays(1));
+		saveOrderItem(order1.getId(), 1L, "아메리카노", 3000L, 10);
+		Order order2 = savePaidOrder(from.plusDays(1));
+		saveOrderItem(order2.getId(), 2L, "카페라떼", 3500L, 5);
+		Order order3 = savePaidOrder(from.plusDays(1));
+		saveOrderItem(order3.getId(), 3L, "바닐라라떼", 4000L, 5);
+		Order order4 = savePaidOrder(from.plusDays(1));
+		saveOrderItem(order4.getId(), fourthMenuId, "바닐라라떼2", 4500L, 5);
+
+		List<PopularMenuCountProjection> result = orderItemRepository.findPopularMenuCounts(from);
+
+		assertThat(result).hasSize(3);
+		assertThat(result.get(0).getMenuId()).isEqualTo(1L);
+		assertThat(result.get(0).getOrderCount()).isEqualTo(10L);
+		assertThat(result.get(1).getMenuId()).isEqualTo(2L);
+		assertThat(result.get(1).getOrderCount()).isEqualTo(5L);
+		assertThat(result.get(2).getMenuId()).isEqualTo(3L);
+		assertThat(result.get(2).getOrderCount()).isEqualTo(5L);
+		assertThat(result).extracting(PopularMenuCountProjection::getMenuId)
+				.doesNotContain(fourthMenuId);
+	}
+
+	@Test
+	void 시드된_3개_메뉴가_모두_동점이면_menu_id_오름차순으로_정렬된다() {
+		LocalDateTime from = LocalDateTime.of(2026, 7, 9, 0, 0, 0);
+
+		Order order1 = savePaidOrder(from.plusDays(1));
+		saveOrderItem(order1.getId(), 2L, "카페라떼", 3500L, 4);
+		Order order2 = savePaidOrder(from.plusDays(1));
+		saveOrderItem(order2.getId(), 3L, "바닐라라떼", 4000L, 4);
+		Order order3 = savePaidOrder(from.plusDays(1));
+		saveOrderItem(order3.getId(), 1L, "아메리카노", 3000L, 4);
+
+		List<PopularMenuCountProjection> result = orderItemRepository.findPopularMenuCounts(from);
+
+		assertThat(result).hasSize(3);
+		assertThat(result.get(0).getMenuId()).isEqualTo(1L);
+		assertThat(result.get(1).getMenuId()).isEqualTo(2L);
+		assertThat(result.get(2).getMenuId()).isEqualTo(3L);
+		assertThat(result).extracting(PopularMenuCountProjection::getOrderCount)
+				.containsExactly(4L, 4L, 4L);
+	}
+
+	@Test
+	void from_경계_이전_주문이_포함되면_생겼을_동점이_경계_필터링으로_인해_발생하지_않는다() {
+		LocalDateTime from = LocalDateTime.of(2026, 7, 9, 0, 0, 0);
+
+		Order includedOrder1 = savePaidOrder(from);
+		saveOrderItem(includedOrder1.getId(), 1L, "아메리카노", 3000L, 3);
+		Order includedOrder2 = savePaidOrder(from);
+		saveOrderItem(includedOrder2.getId(), 2L, "카페라떼", 3500L, 3);
+
+		// 경계보다 1초 이른 주문: 만약 잘못 포함되면 menu 2의 수량이 103이 되어 동점이 깨지고
+		// menu 2가 1위로 뒤바뀌게 된다. 경계 필터링이 올바르면 이 주문은 제외되어 menu 1/2가 동점 유지된다.
+		Order excludedOrder = savePaidOrder(from.minusSeconds(1));
+		saveOrderItem(excludedOrder.getId(), 2L, "카페라떼", 3500L, 100);
+
+		List<PopularMenuCountProjection> result = orderItemRepository.findPopularMenuCounts(from);
+
+		assertThat(result).hasSize(2);
+		assertThat(result.get(0).getMenuId()).isEqualTo(1L);
+		assertThat(result.get(0).getOrderCount()).isEqualTo(3L);
+		assertThat(result.get(1).getMenuId()).isEqualTo(2L);
+		assertThat(result.get(1).getOrderCount()).isEqualTo(3L);
+	}
 }
