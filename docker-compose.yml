@@ -49,6 +49,21 @@ services:
       retries: 5
       start_period: 30s
 
+  # 분산락 유틸(SCRUM-70 다음 서브태스크, point:{userId} 키)이 사용할 로컬 Redis.
+  # 앱은 localhost:6379 로 접속한다(application-dev.yml의 spring.data.redis 기본값과 일치).
+  redis:
+    image: redis:7-alpine
+    container_name: coffee-order-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   # E6-1 태스크3(다중 인스턴스 기동 시나리오 문서화) 시연 전용 서비스.
   # docs/design/multi-instance-scale-check.md 참고. `docker compose up --scale app=N`으로
   # 여러 개를 띄우기 위해 container_name/고정 host ports를 두지 않는다(스케일 시 이름/포트
@@ -65,10 +80,14 @@ services:
       DB_PASSWORD: coffee
       KAFKA_HOST: kafka
       KAFKA_PORT: 9092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       mysql:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     expose:
       - "8080"
