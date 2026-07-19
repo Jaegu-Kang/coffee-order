@@ -49,5 +49,42 @@ services:
       retries: 5
       start_period: 30s
 
+  # E6-1 태스크3(다중 인스턴스 기동 시나리오 문서화) 시연 전용 서비스.
+  # docs/design/multi-instance-scale-check.md 참고. `docker compose up --scale app=N`으로
+  # 여러 개를 띄우기 위해 container_name/고정 host ports를 두지 않는다(스케일 시 이름/포트
+  # 충돌 방지). DB_HOST/KAFKA_HOST는 application-dev.yml이 이미 지원하는 환경변수 오버라이드로,
+  # 컨테이너 네트워크에서 서비스명(mysql/kafka)으로 접속하도록만 지정하며 애플리케이션 코드/설정
+  # 파일은 변경하지 않는다.
+  app:
+    build: .
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: coffee_order
+      DB_USERNAME: coffee
+      DB_PASSWORD: coffee
+      KAFKA_HOST: kafka
+      KAFKA_PORT: 9092
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    expose:
+      - "8080"
+
+  # app 인스턴스가 여러 개(스케일)일 때 호스트 쪽 단일 진입점(localhost:8080)에서
+  # 라운드로빈으로 분산하기 위한 경량 리버스 프록시. 자세한 시연 절차·주의사항은
+  # docs/design/multi-instance-scale-check.md 참고.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: coffee-order-nginx
+    depends_on:
+      - app
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+
 volumes:
   mysql-data:
