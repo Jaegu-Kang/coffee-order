@@ -72,8 +72,30 @@
 > 메뉴명·단가를 스냅샷으로 저장하는 이유: 이후 메뉴 가격이 바뀌어도 과거 주문 금액·이력이
 > 불변이어야 하기 때문(데이터 일관성). 인기 메뉴 집계는 `menu_id` 기준.
 
+## outbox_events — 발행 이벤트 아웃박스 (E6-3 태스크4, SCRUM-78 확장)
+
+| 컬럼 | 타입 | NULL | 기타 |
+| --- | --- | --- | --- |
+| id | BIGINT | N | PK, AUTO_INCREMENT |
+| aggregate_type | VARCHAR(50) | N | 발행 대상 애그리게잇 유형(예: `ORDER`) |
+| aggregate_id | BIGINT | N | 발행 대상 애그리게잇 식별자(예: `orders.id`) |
+| topic | VARCHAR(100) | N | 발행될 Kafka 토픽명(예: `order-events`) |
+| payload | VARCHAR(4000) | N | 발행할 메시지 본문(JSON 직렬화 문자열) |
+| status | VARCHAR(20) | N | PENDING / SENT / FAILED, DEFAULT `PENDING` |
+| retry_count | INT | N | 발행 재시도 횟수, DEFAULT 0 |
+| created_at | DATETIME(6) | N | INDEX(status, created_at) — 릴레이 폴링용 |
+| updated_at | DATETIME(6) | N | |
+| sent_at | DATETIME(6) | Y | 실제 발행 성공 시각(성공 전에는 NULL) |
+
+> `OrderService.order()`가 포인트 차감·주문/주문항목 저장과 **같은 물리 트랜잭션**에서 이 테이블에
+> `PENDING` 행을 원자적으로 기록한다(Transactional Outbox 패턴). 실제 Kafka 발행은 별도
+> `OutboxRelay`가 이 테이블을 폴링해 담당하며, 트랜잭션 내부에서 직접 브로커로 전송하지 않는다
+> (docs/design/outbox-relay-design.md). 컨슈머 측 멱등 처리·행 보관/정리(retention) 정책은 이
+> 확장 범위 밖이다(at-least-once 전달만 보장).
+
 ## 인덱스 요약
 
 - `point_histories(user_id, created_at)` — 사용자 이력 조회.
 - `orders(ordered_at)` — 최근 7일 인기 메뉴 집계.
 - `order_items(menu_id)`, `order_items(order_id)` — 집계/조인.
+- `outbox_events(status, created_at)` — Outbox 릴레이 폴링(PENDING 오래된 순).

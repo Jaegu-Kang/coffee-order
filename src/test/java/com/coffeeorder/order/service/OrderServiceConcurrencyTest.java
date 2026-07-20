@@ -1,7 +1,6 @@
 package com.coffeeorder.order.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,10 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
@@ -38,6 +34,7 @@ import com.coffeeorder.config.JpaAuditingConfig;
 import com.coffeeorder.menu.repository.MenuRepository;
 import com.coffeeorder.order.dto.OrderCreateRequest;
 import com.coffeeorder.order.entity.Order;
+import com.coffeeorder.order.outbox.repository.OutboxEventRepository;
 import com.coffeeorder.order.repository.OrderItemRepository;
 import com.coffeeorder.order.repository.OrderRepository;
 import com.coffeeorder.point.entity.PointBalance;
@@ -64,10 +61,12 @@ import com.coffeeorder.user.repository.UserRepository;
  * 어떻게: {@code com.coffeeorder.point.service.PointServiceConcurrencyTest}와 동일하게
  * {@link com.coffeeorder.common.lock.InMemoryRedisDistributedLock} 대역을 사용해 실제 Redis
  * 없이 결정적으로 검증한다(다중 인스턴스 간 실제 Redis 분산락 자체의 검증은 범위 밖 — 해당
- * 클래스 Javadoc 참고). {@code KafkaTemplate}은 이 서브태스크 범위(발행-트랜잭션 정합성/Outbox는
- * 별도 E6-3)가 아니므로 Mockito mock 빈으로 대체한다. {@code OrderService}를 {@code @Import}로
- * 등록해 Spring이 관리하는 실제 {@code @Transactional} 프록시를 사용한다(수동 {@code new
- * OrderService(...)}는 트랜잭션 프록시가 없어 비관적 락이 조기 해제되므로 회피).
+ * 클래스 Javadoc 참고). 발행-트랜잭션 정합성(Outbox, SCRUM-78)은 별도 E6-3 태스크4 범위이며,
+ * {@code OrderService}는 {@code outbox_events} 저장에 {@code KafkaTemplate}을 필요로 하지
+ * 않으므로(실제 Kafka 발행은 별도 {@code OutboxRelay} 담당) 이 테스트도 Kafka 관련 대역이
+ * 필요 없다. {@code OrderService}를 {@code @Import}로 등록해 Spring이 관리하는 실제
+ * {@code @Transactional} 프록시를 사용한다(수동 {@code new OrderService(...)}는 트랜잭션
+ * 프록시가 없어 비관적 락이 조기 해제되므로 회피).
  * <p>
  * 시드 메뉴 {@code id=1}(가격은 {@link MenuRepository}로 조회해 매직 넘버 중복을 피함)을 사용하고,
  * 시드 사용자(user_id 1~3)와 무관한 신규 사용자를 생성해 격리한다. {@code PointBalanceRepositoryLockTest}
@@ -77,25 +76,13 @@ import com.coffeeorder.user.repository.UserRepository;
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
-@Import({JpaAuditingConfig.class, OrderService.class, InMemoryRedisDistributedLockTestConfig.class,
-		OrderServiceConcurrencyTest.KafkaTemplateTestConfig.class})
+@Import({JpaAuditingConfig.class, OrderService.class, InMemoryRedisDistributedLockTestConfig.class})
 @ActiveProfiles("test")
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class OrderServiceConcurrencyTest {
 
 	private static final Long SEED_MENU_ID = 1L;
 	private static final long AWAIT_TIMEOUT_SECONDS = 30L;
-
-	/** 실제 Kafka 브로커 없이 {@code KafkaTemplate} 의존성만 채우는 Mockito mock 빈. */
-	@TestConfiguration
-	static class KafkaTemplateTestConfig {
-
-		@Bean
-		@SuppressWarnings("unchecked")
-		KafkaTemplate<String, Object> kafkaTemplate() {
-			return mock(KafkaTemplate.class);
-		}
-	}
 
 	@Autowired
 	private OrderService orderService;
@@ -119,6 +106,9 @@ class OrderServiceConcurrencyTest {
 	private OrderItemRepository orderItemRepository;
 
 	@Autowired
+	private OutboxEventRepository outboxEventRepository;
+
+	@Autowired
 	private PlatformTransactionManager transactionManager;
 
 	private Long userId;
@@ -138,6 +128,9 @@ class OrderServiceConcurrencyTest {
 			orderItemRepository.findAll().stream()
 					.filter(item -> orderIds.contains(item.getOrderId()))
 					.forEach(orderItemRepository::delete);
+			outboxEventRepository.findAll().stream()
+					.filter(outboxEvent -> orderIds.contains(outboxEvent.getAggregateId()))
+					.forEach(outboxEventRepository::delete);
 			orderRepository.findAll().stream()
 					.filter(order -> order.getUserId().equals(cleanupUserId))
 					.forEach(orderRepository::delete);

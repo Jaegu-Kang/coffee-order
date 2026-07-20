@@ -12,7 +12,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -21,7 +23,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coffeeorder.common.exception.BusinessException;
@@ -34,7 +35,9 @@ import com.coffeeorder.order.dto.OrderCreateRequest;
 import com.coffeeorder.order.entity.Order;
 import com.coffeeorder.order.entity.OrderItem;
 import com.coffeeorder.order.entity.OrderStatus;
-import com.coffeeorder.order.event.OrderEvent;
+import com.coffeeorder.order.outbox.entity.OutboxEvent;
+import com.coffeeorder.order.outbox.entity.OutboxEventStatus;
+import com.coffeeorder.order.outbox.repository.OutboxEventRepository;
 import com.coffeeorder.order.repository.OrderItemRepository;
 import com.coffeeorder.order.repository.OrderRepository;
 import com.coffeeorder.point.entity.PointBalance;
@@ -42,6 +45,7 @@ import com.coffeeorder.point.entity.PointHistory;
 import com.coffeeorder.point.repository.PointBalanceRepository;
 import com.coffeeorder.point.repository.PointHistoryRepository;
 import com.coffeeorder.user.repository.UserRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 @ExtendWith(MockitoExtension.class)
 class OrderServiceTest {
@@ -65,14 +69,29 @@ class OrderServiceTest {
 	private PointHistoryRepository pointHistoryRepository;
 
 	@Mock
-	private KafkaTemplate<String, Object> kafkaTemplate;
+	private OutboxEventRepository outboxEventRepository;
 
 	@Mock
 	private RedisDistributedLock redisDistributedLock;
 
+	private static final ObjectMapper ORDER_EVENT_OBJECT_MAPPER = KafkaProducerConfig.orderEventObjectMapper();
+
 	private OrderService orderService() {
 		return new OrderService(orderRepository, orderItemRepository, userRepository, menuRepository,
-				pointBalanceRepository, pointHistoryRepository, kafkaTemplate, redisDistributedLock);
+				pointBalanceRepository, pointHistoryRepository, outboxEventRepository, redisDistributedLock);
+	}
+
+	/**
+	 * {@link OutboxEvent#getPayload()}(JSON 문자열)를 {@code KafkaProducerConfigEmbeddedKafkaTest}와
+	 * 동일한 역직렬화 규약({@link KafkaProducerConfig#orderEventObjectMapper()})으로 파싱해 필드
+	 * 단위로 검증할 수 있게 한다.
+	 */
+	private Map<String, Object> payloadAsMap(OutboxEvent outboxEvent) {
+		try {
+			return ORDER_EVENT_OBJECT_MAPPER.readValue(outboxEvent.getPayload(), Map.class);
+		} catch (Exception e) {
+			throw new IllegalStateException(e);
+		}
 	}
 
 	/** {@code executeWithLock}이 실제 락 없이 콜백({@code Supplier})을 즉시 실행하도록 스텁한다. */
@@ -129,16 +148,21 @@ class OrderServiceTest {
 		assertThat(savedHistory.getAmount()).isEqualTo(7000L);
 		assertThat(savedHistory.getBalanceAfter()).isEqualTo(3000L);
 
-		ArgumentCaptor<String> topicCaptor = ArgumentCaptor.forClass(String.class);
-		ArgumentCaptor<OrderEvent> eventCaptor = ArgumentCaptor.forClass(OrderEvent.class);
-		verify(kafkaTemplate).send(topicCaptor.capture(), eventCaptor.capture());
-		assertThat(topicCaptor.getValue()).isEqualTo(KafkaProducerConfig.ORDER_EVENTS_TOPIC);
-		OrderEvent orderEvent = eventCaptor.getValue();
-		assertThat(orderEvent.getOrderId()).isEqualTo(result.getOrder().getId());
-		assertThat(orderEvent.getUserId()).isEqualTo(result.getOrder().getUserId());
-		assertThat(orderEvent.getMenuId()).isEqualTo(result.getOrderItems().get(0).getMenuId());
-		assertThat(orderEvent.getAmount()).isEqualTo(result.getOrder().getTotalAmount());
-		assertThat(orderEvent.getOrderedAt())
+		ArgumentCaptor<OutboxEvent> outboxEventCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+		verify(outboxEventRepository).save(outboxEventCaptor.capture());
+		OutboxEvent outboxEvent = outboxEventCaptor.getValue();
+		assertThat(outboxEvent.getAggregateType()).isEqualTo("ORDER");
+		assertThat(outboxEvent.getAggregateId()).isEqualTo(result.getOrder().getId());
+		assertThat(outboxEvent.getTopic()).isEqualTo(KafkaProducerConfig.ORDER_EVENTS_TOPIC);
+		assertThat(outboxEvent.getStatus()).isEqualTo(OutboxEventStatus.PENDING);
+		assertThat(outboxEvent.getRetryCount()).isZero();
+
+		Map<String, Object> payload = payloadAsMap(outboxEvent);
+		assertThat(((Number) payload.get("orderId")).longValue()).isEqualTo(result.getOrder().getId());
+		assertThat(((Number) payload.get("userId")).longValue()).isEqualTo(result.getOrder().getUserId());
+		assertThat(((Number) payload.get("menuId")).longValue()).isEqualTo(result.getOrderItems().get(0).getMenuId());
+		assertThat(((Number) payload.get("amount")).longValue()).isEqualTo(result.getOrder().getTotalAmount());
+		assertThat(Instant.parse((String) payload.get("orderedAt")))
 				.isEqualTo(result.getOrder().getOrderedAt().toInstant(ZoneOffset.UTC));
 	}
 
@@ -161,15 +185,13 @@ class OrderServiceTest {
 		assertThat(result.getOrder().getTotalAmount()).isEqualTo(3500L);
 		assertThat(result.getOrderItems().get(0).getQuantity()).isEqualTo(1);
 
-		ArgumentCaptor<String> topicCaptor = ArgumentCaptor.forClass(String.class);
-		ArgumentCaptor<OrderEvent> eventCaptor = ArgumentCaptor.forClass(OrderEvent.class);
-		verify(kafkaTemplate).send(topicCaptor.capture(), eventCaptor.capture());
-		assertThat(topicCaptor.getValue()).isEqualTo(KafkaProducerConfig.ORDER_EVENTS_TOPIC);
-		OrderEvent orderEvent = eventCaptor.getValue();
-		assertThat(orderEvent.getUserId()).isEqualTo(result.getOrder().getUserId());
-		assertThat(orderEvent.getMenuId()).isEqualTo(result.getOrderItems().get(0).getMenuId());
-		assertThat(orderEvent.getAmount()).isEqualTo(result.getOrder().getTotalAmount());
-		assertThat(orderEvent.getOrderedAt())
+		ArgumentCaptor<OutboxEvent> outboxEventCaptor = ArgumentCaptor.forClass(OutboxEvent.class);
+		verify(outboxEventRepository).save(outboxEventCaptor.capture());
+		Map<String, Object> payload = payloadAsMap(outboxEventCaptor.getValue());
+		assertThat(((Number) payload.get("userId")).longValue()).isEqualTo(result.getOrder().getUserId());
+		assertThat(((Number) payload.get("menuId")).longValue()).isEqualTo(result.getOrderItems().get(0).getMenuId());
+		assertThat(((Number) payload.get("amount")).longValue()).isEqualTo(result.getOrder().getTotalAmount());
+		assertThat(Instant.parse((String) payload.get("orderedAt")))
 				.isEqualTo(result.getOrder().getOrderedAt().toInstant(ZoneOffset.UTC));
 	}
 
@@ -186,7 +208,7 @@ class OrderServiceTest {
 
 		verify(menuRepository, never()).findById(any());
 		verify(orderRepository, never()).save(any());
-		verify(kafkaTemplate, never()).send(any(), any());
+		verify(outboxEventRepository, never()).save(any());
 	}
 
 	@Test
@@ -202,7 +224,7 @@ class OrderServiceTest {
 				.isEqualTo(ErrorCode.MENU_NOT_FOUND);
 
 		verify(orderRepository, never()).save(any());
-		verify(kafkaTemplate, never()).send(any(), any());
+		verify(outboxEventRepository, never()).save(any());
 	}
 
 	@Test
@@ -224,7 +246,7 @@ class OrderServiceTest {
 
 		verify(orderRepository, never()).save(any());
 		verify(pointHistoryRepository, never()).save(any());
-		verify(kafkaTemplate, never()).send(any(), any());
+		verify(outboxEventRepository, never()).save(any());
 	}
 
 	@Test
@@ -262,6 +284,6 @@ class OrderServiceTest {
 
 		verify(pointBalanceRepository, never()).findByIdForUpdate(any());
 		verify(orderRepository, never()).save(any());
-		verify(kafkaTemplate, never()).send(any(), any());
+		verify(outboxEventRepository, never()).save(any());
 	}
 }

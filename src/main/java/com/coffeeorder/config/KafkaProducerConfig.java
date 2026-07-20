@@ -96,10 +96,9 @@ public class KafkaProducerConfig {
 	 * (구체 타입은 태스크2에서 확정 예정이라 제네릭은 {@code Object}로 유지).
 	 * {@code KEY_SERIALIZER_CLASS_CONFIG}/{@code VALUE_SERIALIZER_CLASS_CONFIG} configs 항목은
 	 * (기존 테스트가 검증하므로) 그대로 두되, 실제 사용되는 {@link JsonSerializer} 인스턴스는
-	 * {@link JacksonUtils#enhancedObjectMapper()}에 {@code WRITE_DATES_AS_TIMESTAMPS}를 비활성화한
-	 * {@link ObjectMapper}로 교체해, {@code orderedAt} 같은 {@link java.time.Instant} 필드가
-	 * epoch 숫자가 아닌 docs/api/order.md 예시의 {@code "...Z"} ISO-8601 문자열로 직렬화되게 한다
-	 * (OrderEventTest의 직렬화 계약과 동일한 설정, SCRUM-61).
+	 * {@link #orderEventObjectMapper()}로 교체해, {@code orderedAt} 같은 {@link java.time.Instant}
+	 * 필드가 epoch 숫자가 아닌 docs/api/order.md 예시의 {@code "...Z"} ISO-8601 문자열로
+	 * 직렬화되게 한다(OrderEventTest의 직렬화 계약과 동일한 설정, SCRUM-61).
 	 */
 	@Bean
 	public ProducerFactory<String, Object> producerFactory() {
@@ -108,10 +107,21 @@ public class KafkaProducerConfig {
 		configs.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		configs.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
 
-		ObjectMapper orderEventObjectMapper = JacksonUtils.enhancedObjectMapper()
-				.configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
 		return new DefaultKafkaProducerFactory<>(configs, StringSerializer::new,
-				() -> new JsonSerializer<>(orderEventObjectMapper));
+				() -> new JsonSerializer<>(orderEventObjectMapper()));
+	}
+
+	/**
+	 * {@link JacksonUtils#enhancedObjectMapper()}에 {@code WRITE_DATES_AS_TIMESTAMPS}를 비활성화한
+	 * {@link ObjectMapper}를 반환한다. {@link #producerFactory()}의 {@link JsonSerializer}가 이
+	 * 설정으로 값을 직렬화하며, {@code OrderService}(SCRUM-78, Outbox 행 {@code payload} JSON 생성)와
+	 * {@code com.coffeeorder.order.outbox.OutboxRelay}(저장된 {@code payload} 역직렬화 후 재발행)도
+	 * 동일한 직렬화 규약을 공유하기 위해 이 메서드를 재사용한다(단일 소스 유지, 세 곳에서 각자
+	 * {@code ObjectMapper}를 다르게 구성해 직렬화 규약이 갈라지는 것을 방지).
+	 */
+	public static ObjectMapper orderEventObjectMapper() {
+		return JacksonUtils.enhancedObjectMapper()
+				.configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
 	}
 
 	@Bean
