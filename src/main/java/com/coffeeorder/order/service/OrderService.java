@@ -39,6 +39,16 @@ import com.coffeeorder.user.repository.UserRepository;
  * 인스턴스 내 동시 요청도 직렬화한다(SCRUM-73 / E6-2 태스크4). 발행-트랜잭션 정합성 강화
  * (AFTER_COMMIT/Outbox)는 별도 도전 과제(E6-3) 범위이며 이번 티켓에서는 다루지 않는다
  * (docs/design/jira-backlog.md). 즉 이번 발행은 커밋 이전(트랜잭션 내부) 동기 발행이다.
+ * <p>
+ * 재점검 결과(E6-3 태스크1, docs/design/jira-manual.md 246행): {@code order()}는 클래스 레벨
+ * {@code @Transactional(readOnly = true)}를 오버라이드하는 단일 {@code @Transactional} 메서드이고,
+ * {@link RedisDistributedLock#executeWithLock}은 별도 스레드/트랜잭션을 열지 않고 호출 스레드의
+ * 트랜잭션 안에서 동기 실행되며, 포인트 차감~주문/주문항목 저장 사이에 {@code REQUIRES_NEW} 등
+ * 트랜잭션 경계를 끊는 코드나 self-invocation이 없다. 따라서 포인트 차감(잔액 갱신 + {@code USE}
+ * 이력 insert)부터 {@code orders}/{@code order_items} 저장까지가 물리적으로 하나의 트랜잭션이며,
+ * 어느 단계든 실패 시 전체 롤백됨을
+ * {@link com.coffeeorder.order.service.OrderServiceAtomicityTest}에서 실증했다(기존 사용자의
+ * 잔액 UPDATE 롤백, 신규 사용자의 잔액 행 INSERT 자체 롤백 두 케이스 모두 포함).
  */
 @Service
 @Transactional(readOnly = true)
