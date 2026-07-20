@@ -34,12 +34,15 @@ import com.coffeeorder.order.entity.OrderItem;
  * 엔티티({@link Order}, {@link OrderItem})를 외부 계약에 직접 노출하지 않기 위해 필요한 필드만
  * 별도로 담는다(docs/code-convention.md "엔티티 미노출" 원칙).
  * <p>
- * SCRUM-76(E6-3 태스크2)부터는 {@code OrderService.order()}가 이 클래스를
+ * SCRUM-76(E6-3 태스크2)~SCRUM-77(태스크3)에서는 {@code OrderService.order()}가 이 클래스를
  * {@code org.springframework.context.ApplicationEventPublisher}로 발행하는 내부 스프링 애플리케이션
- * 이벤트 payload로도 재사용한다. 실제 Kafka 발행은
- * {@link com.coffeeorder.order.event.OrderEventKafkaListener}가
- * {@code @TransactionalEventListener(phase = AFTER_COMMIT)}로 이 이벤트를 받아 담당하므로, 이 클래스
- * 자체의 스키마·필드 계약(외부 시스템 계약)은 변경되지 않는다.
+ * 이벤트 payload로 재사용하고, {@code @TransactionalEventListener(phase = AFTER_COMMIT)} 리스너가
+ * 커밋 후 직접 Kafka로 발행했다. SCRUM-78(태스크4, Transactional Outbox 확장)부터는 그 경로 대신
+ * {@code OrderService.order()}가 이 클래스를 {@code com.coffeeorder.config.KafkaProducerConfig#orderEventObjectMapper()}로
+ * JSON 문자열 직렬화해 {@code com.coffeeorder.order.outbox.entity.OutboxEvent}의 {@code payload}로
+ * 같은 트랜잭션 안에 저장하고, 실제 Kafka 발행은 별도 폴링 컴포넌트
+ * {@code com.coffeeorder.order.outbox.OutboxRelay}가 담당한다. 어느 경로든 이 클래스 자체의
+ * 스키마·필드 계약(외부 시스템 계약)은 변경되지 않는다.
  */
 public class OrderEvent {
 
