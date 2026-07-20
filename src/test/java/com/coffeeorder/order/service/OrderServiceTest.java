@@ -245,8 +245,36 @@ class OrderServiceTest {
 				.isEqualTo(ErrorCode.INSUFFICIENT_POINT);
 
 		verify(orderRepository, never()).save(any());
+		verify(pointBalanceRepository, never()).save(any());
 		verify(pointHistoryRepository, never()).save(any());
 		verify(outboxEventRepository, never()).save(any());
+	}
+
+	@Test
+	void order_잔액과_결제금액이_정확히_같으면_정상_결제되어_잔액이_0이_된다() {
+		Long userId = 1L;
+		Menu latte = menu(2L, "카페라떼", 3500L);
+		PointBalance balance = new PointBalance(userId, 3500L);
+		when(userRepository.existsById(userId)).thenReturn(true);
+		when(menuRepository.findById(2L)).thenReturn(Optional.of(latte));
+		when(pointBalanceRepository.findByIdForUpdate(userId)).thenReturn(Optional.of(balance));
+		stubLockToRunImmediately();
+		when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
+		when(orderItemRepository.save(any(OrderItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+		OrderCreateRequest request = new OrderCreateRequest(userId, 2L, 1);
+
+		OrderResult result = orderService().order(request);
+
+		assertThat(result.getOrder().getTotalAmount()).isEqualTo(3500L);
+		assertThat(result.getBalanceAfter()).isEqualTo(0L);
+
+		ArgumentCaptor<PointHistory> historyCaptor = ArgumentCaptor.forClass(PointHistory.class);
+		verify(pointHistoryRepository).save(historyCaptor.capture());
+		PointHistory savedHistory = historyCaptor.getValue();
+		assertThat(savedHistory.getType()).isEqualTo(PointHistory.TYPE_USE);
+		assertThat(savedHistory.getAmount()).isEqualTo(3500L);
+		assertThat(savedHistory.getBalanceAfter()).isEqualTo(0L);
 	}
 
 	@Test
