@@ -1,7 +1,11 @@
 package com.coffeeorder.order.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -9,6 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import org.apache.kafka.clients.admin.AdminClient;
@@ -20,12 +25,16 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -43,6 +52,7 @@ import org.testcontainers.mysql.MySQLContainer;
 import com.coffeeorder.common.lock.RedisDistributedLock;
 import com.coffeeorder.config.KafkaProducerConfig;
 import com.coffeeorder.menu.repository.MenuRepository;
+import com.coffeeorder.order.dto.OrderCreateRequest;
 import com.coffeeorder.order.entity.Order;
 import com.coffeeorder.order.entity.OrderItem;
 import com.coffeeorder.order.entity.OrderStatus;
@@ -98,6 +108,53 @@ class OrderServiceTestcontainersIntegrationTest {
 
 	private static final ObjectMapper ORDER_EVENT_OBJECT_MAPPER = KafkaProducerConfig.orderEventObjectMapper();
 
+	private static final String FORCED_FAILURE_MESSAGE =
+			"강제 실패: order_items 저장 단계(Testcontainers 통합 테스트 전용)";
+
+	private static final long FORCED_FAILURE_KAFKA_POLL_TIMEOUT_SECONDS = 5L;
+
+	/**
+	 * {@code order_items} 저장 단계를 강제 실패시킬지 여부를 나타내는 스위치({@code OrderServiceAtomicityTest}의
+	 * 프록시 패턴 참고). 기본값 OFF로 두어 기존 두 개의 end-to-end 테스트에는 전혀 영향을 주지 않고,
+	 * 강제 실패 테스트에서만 켠 뒤 {@link #resetForcedFailureToggle()}에서 매 테스트 종료 후 되돌린다.
+	 * {@link ForcedFailureOrderItemRepositoryTestConfig}가 등록하는 {@code @Primary} 빈은 스프링
+	 * 컨테이너 내에서 싱글턴이라 테스트 메서드마다 새로 생성되는 인스턴스 필드로는 이 스위치를 공유할 수
+	 * 없으므로 static으로 둔다.
+	 */
+	private static final AtomicBoolean FORCE_ORDER_ITEM_SAVE_FAILURE = new AtomicBoolean(false);
+
+	/**
+	 * {@code OrderServiceAtomicityTest.FailingOrderItemRepositoryTestConfig}와 동일한 방식(JDK
+	 * 동적 프록시로 실제 {@code OrderItemRepository}에 위임하되 {@code save(OrderItem)} 호출만 가로챔)이되,
+	 * {@link #FORCE_ORDER_ITEM_SAVE_FAILURE}가 켜져 있을 때만 예외를 던진다. {@code @SpringBootTest}가
+	 * 로드하는 테스트 클래스에 static 중첩 {@code @TestConfiguration}을 두면 별도의 {@code @Import} 없이도
+	 * 스프링 부트가 자동으로 인식해 기본 애플리케이션 설정에 추가로 적용한다. 프로덕션
+	 * {@code OrderService}/{@code OrderItemRepository} 코드는 전혀 수정하지 않는다.
+	 */
+	@TestConfiguration
+	static class ForcedFailureOrderItemRepositoryTestConfig {
+
+		@Bean
+		@Primary
+		OrderItemRepository forcedFailureOrderItemRepository(OrderItemRepository orderItemRepository) {
+			InvocationHandler handler = (proxy, method, args) -> {
+				if (FORCE_ORDER_ITEM_SAVE_FAILURE.get() && "save".equals(method.getName())
+						&& args != null && args.length == 1 && args[0] instanceof OrderItem) {
+					throw new RuntimeException(FORCED_FAILURE_MESSAGE);
+				}
+				try {
+					return method.invoke(orderItemRepository, args);
+				} catch (InvocationTargetException e) {
+					throw e.getCause();
+				}
+			};
+			return (OrderItemRepository) Proxy.newProxyInstance(
+					OrderItemRepository.class.getClassLoader(),
+					new Class<?>[] {OrderItemRepository.class},
+					handler);
+		}
+	}
+
 	@Container
 	static final MySQLContainer MYSQL_CONTAINER = new MySQLContainer("mysql:8.0")
 			.withDatabaseName("coffee_order")
@@ -147,6 +204,9 @@ class OrderServiceTestcontainersIntegrationTest {
 	private TestRestTemplate testRestTemplate;
 
 	@Autowired
+	private OrderService orderService;
+
+	@Autowired
 	private UserRepository userRepository;
 
 	@Autowired
@@ -175,6 +235,11 @@ class OrderServiceTestcontainersIntegrationTest {
 
 	@Autowired
 	private RedisTemplate<String, Object> redisTemplate;
+
+	@AfterEach
+	void resetForcedFailureToggle() {
+		FORCE_ORDER_ITEM_SAVE_FAILURE.set(false);
+	}
 
 	private Long createUserWithBalance(long initialBalance) {
 		Long newUserId = userRepository.save(new User("Testcontainers-통합-테스트")).getId();
@@ -273,6 +338,52 @@ class OrderServiceTestcontainersIntegrationTest {
 	}
 
 	/**
+	 * {@code OrderServiceAtomicityTest}가 H2 위에서 검증한 "저장 단계 강제 실패 시 롤백" 시나리오를, 실제
+	 * MySQL/Redis/Kafka 위에서도 성립하는지 확인한다(태스크3 범위: {@code OrderServiceAtomicityTest}
+	 * 클래스 Javadoc의 "롤백 시 미발행 테스트"). {@link #FORCE_ORDER_ITEM_SAVE_FAILURE}를 켠 채
+	 * {@code order_items} 저장 단계에서 강제로 예외를 유도해, 앞서 수행한 포인트 차감(잔액·이력)까지
+	 * 포함한 전체 트랜잭션이 실제 MySQL 위에서 물리적으로 롤백되는지, {@code outbox_events}에도 행이
+	 * 남지 않는지(커밋 전 저장이므로 애초에 insert 자체가 롤백), {@code outboxRelay.relayPendingEvents()}를
+	 * 호출해도({@code outbox_events}가 비어 있으므로) 아무 변화가 없는지, 마지막으로 실제 Kafka
+	 * 컨슈머로 5초간 폴링해도 이 사용자에 대한 이벤트가 전혀 수신되지 않는지를 함께 검증한다.
+	 */
+	@Test
+	void 저장_단계_강제_실패_시_실제_인프라_위에서_트랜잭션이_롤백되고_outbox_Kafka로_이벤트가_전혀_발행되지_않는다() throws Exception {
+		long price = menuRepository.findById(SEED_MENU_ID).orElseThrow().getPrice();
+		long initialBalance = price * 3;
+		Long userId = createUserWithBalance(initialBalance);
+
+		int outboxEventCountBefore = outboxEventRepository.findAll().size();
+
+		FORCE_ORDER_ITEM_SAVE_FAILURE.set(true);
+		assertThatThrownBy(() -> orderService.order(new OrderCreateRequest(userId, SEED_MENU_ID, 1)))
+				.isInstanceOf(RuntimeException.class)
+				.hasMessage(FORCED_FAILURE_MESSAGE);
+
+		PointBalance balanceAfter = pointBalanceRepository.findById(userId).orElseThrow();
+		assertThat(balanceAfter.getBalance()).isEqualTo(initialBalance);
+
+		List<PointHistory> useHistories = pointHistoryRepository.findAll().stream()
+				.filter(history -> history.getUserId().equals(userId))
+				.filter(history -> history.getType() == PointHistoryType.USE)
+				.collect(Collectors.toList());
+		assertThat(useHistories).isEmpty();
+
+		List<Order> orders = orderRepository.findAll().stream()
+				.filter(order -> order.getUserId().equals(userId))
+				.collect(Collectors.toList());
+		assertThat(orders).isEmpty();
+
+		assertThat(outboxEventRepository.findAll()).hasSize(outboxEventCountBefore);
+
+		// relay를 호출해도(발행 대상 outbox 행 자체가 없으므로) outbox_events 개수는 그대로다.
+		outboxRelay.relayPendingEvents();
+		assertThat(outboxEventRepository.findAll()).hasSize(outboxEventCountBefore);
+
+		assertNoOrderEventPublishedForUser(userId, Duration.ofSeconds(FORCED_FAILURE_KAFKA_POLL_TIMEOUT_SECONDS));
+	}
+
+	/**
 	 * {@code order-events} 토픽을 처음부터({@code earliest}) 구독해, {@code orderId}에 해당하는
 	 * 레코드를 찾을 때까지 폴링한다. 이 테스트 클래스 안에서 여러 {@code @Test}가 같은 토픽을
 	 * 공유하므로(컨테이너가 클래스 단위로 재사용됨) 단순히 첫 레코드만 확인하지 않고 {@code orderId}로
@@ -300,5 +411,35 @@ class OrderServiceTestcontainersIntegrationTest {
 			}
 		}
 		throw new AssertionError("order-events 토픽에서 orderId=" + orderId + " 레코드를 시간 내에 수신하지 못했습니다.");
+	}
+
+	/**
+	 * 강제 실패 시나리오에서는 주문 자체가 롤백되어 {@code orderId}가 존재하지 않으므로 {@code userId}로
+	 * 이벤트를 식별한다. 이 테스트 클래스의 각 {@code @Test}는 매번 새 사용자를 생성해 {@code userId}가
+	 * 서로 겹치지 않으므로(같은 토픽을 공유하더라도) 다른 테스트가 발행한 이벤트와 혼동되지 않는다.
+	 * {@code timeout} 동안 폴링해 해당 {@code userId}의 이벤트가 하나라도 수신되면 즉시 실패시킨다.
+	 */
+	private void assertNoOrderEventPublishedForUser(Long userId, Duration timeout) throws Exception {
+		Map<String, Object> consumerConfig = new HashMap<>();
+		consumerConfig.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_CONTAINER.getBootstrapServers());
+		consumerConfig.put(ConsumerConfig.GROUP_ID_CONFIG, CONSUMER_GROUP_ID + "-forced-failure-" + userId);
+		consumerConfig.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+
+		try (Consumer<String, String> consumer = new KafkaConsumer<>(consumerConfig, new StringDeserializer(),
+				new StringDeserializer())) {
+			consumer.subscribe(List.of(KafkaProducerConfig.ORDER_EVENTS_TOPIC));
+
+			long deadline = System.currentTimeMillis() + timeout.toMillis();
+			while (System.currentTimeMillis() < deadline) {
+				ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(500));
+				for (ConsumerRecord<String, String> record : records) {
+					Map<String, Object> payload = ORDER_EVENT_OBJECT_MAPPER.readValue(record.value(), Map.class);
+					if (((Number) payload.get("userId")).longValue() == userId) {
+						throw new AssertionError("강제 실패 이후에도 order-events 토픽에 userId=" + userId
+								+ " 이벤트가 발행되었습니다: " + record.value());
+					}
+				}
+			}
+		}
 	}
 }
