@@ -5,14 +5,13 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 
-import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.coffeeorder.common.exception.BusinessException;
 import com.coffeeorder.common.exception.ErrorCode;
 import com.coffeeorder.common.lock.RedisDistributedLock;
-import com.coffeeorder.config.KafkaProducerConfig;
 import com.coffeeorder.menu.entity.Menu;
 import com.coffeeorder.menu.repository.MenuRepository;
 import com.coffeeorder.order.dto.OrderCreateRequest;
@@ -30,15 +29,21 @@ import com.coffeeorder.user.repository.UserRepository;
 
 /**
  * 주문/결제 비즈니스 로직. {@code docs/api/order.md}의 {@code POST /api/orders} 중
- * 1~2, 4~6단계(존재확인 → 총액 계산 → 포인트 차감/이력 기록 → 주문·주문항목 저장 →
- * {@code order-events} 토픽 발행)를 하나의 트랜잭션으로 처리한다(SCRUM-55, SCRUM-61).
+ * 1~2, 4~5단계(존재확인 → 총액 계산 → 포인트 차감/이력 기록 → 주문·주문항목 저장)를 하나의
+ * 트랜잭션으로 처리한다(SCRUM-55, SCRUM-61).
  * <p>
  * 3단계(잔액 조회~차감~{@code USE} 이력 기록)는 {@code point:{userId}} 키의 Redis
  * 분산락({@link RedisDistributedLock})으로 다중 인스턴스 간 직렬화하고, 그 안에서
  * {@link PointBalanceRepository#findByIdForUpdate(Long)}로 비관적 락 조회를 수행해 동일
- * 인스턴스 내 동시 요청도 직렬화한다(SCRUM-73 / E6-2 태스크4). 발행-트랜잭션 정합성 강화
- * (AFTER_COMMIT/Outbox)는 별도 도전 과제(E6-3) 범위이며 이번 티켓에서는 다루지 않는다
- * (docs/design/jira-backlog.md). 즉 이번 발행은 커밋 이전(트랜잭션 내부) 동기 발행이다.
+ * 인스턴스 내 동시 요청도 직렬화한다(SCRUM-73 / E6-2 태스크4).
+ * <p>
+ * 6단계({@code order-events} 토픽 발행)는 SCRUM-76(E6-3 태스크2)에서 커밋 이전 동기
+ * {@code kafkaTemplate.send(...)} 호출을 제거하고, {@link ApplicationEventPublisher#publishEvent}로
+ * {@link OrderEvent}를 애플리케이션 이벤트로만 발행하도록 전환했다. 실제 Kafka 발행은 트랜잭션 커밋
+ * 이후({@code AFTER_COMMIT})에만 {@link com.coffeeorder.order.event.OrderEventKafkaListener}가
+ * 담당하므로, {@code docs/api/order.md} 6번("커밋 후 발행")과 실제 구현이 일치한다. 발행-트랜잭션
+ * 정합성 강화 중 롤백 시 미발행 테스트(태스크3)·Outbox(태스크4)는 별도 후속 범위다
+ * (docs/design/kafka-after-commit-check.md).
  * <p>
  * 재점검 결과(E6-3 태스크1, docs/design/jira-manual.md 246행): {@code order()}는 클래스 레벨
  * {@code @Transactional(readOnly = true)}를 오버라이드하는 단일 {@code @Transactional} 메서드이고,
@@ -65,7 +70,7 @@ public class OrderService {
 	private final MenuRepository menuRepository;
 	private final PointBalanceRepository pointBalanceRepository;
 	private final PointHistoryRepository pointHistoryRepository;
-	private final KafkaTemplate<String, Object> kafkaTemplate;
+	private final ApplicationEventPublisher eventPublisher;
 	private final RedisDistributedLock redisDistributedLock;
 
 	public OrderService(OrderRepository orderRepository,
@@ -74,7 +79,7 @@ public class OrderService {
 			MenuRepository menuRepository,
 			PointBalanceRepository pointBalanceRepository,
 			PointHistoryRepository pointHistoryRepository,
-			KafkaTemplate<String, Object> kafkaTemplate,
+			ApplicationEventPublisher eventPublisher,
 			RedisDistributedLock redisDistributedLock) {
 		this.orderRepository = orderRepository;
 		this.orderItemRepository = orderItemRepository;
@@ -82,7 +87,7 @@ public class OrderService {
 		this.menuRepository = menuRepository;
 		this.pointBalanceRepository = pointBalanceRepository;
 		this.pointHistoryRepository = pointHistoryRepository;
-		this.kafkaTemplate = kafkaTemplate;
+		this.eventPublisher = eventPublisher;
 		this.redisDistributedLock = redisDistributedLock;
 	}
 
@@ -122,7 +127,7 @@ public class OrderService {
 		OrderItem orderItem = orderItemRepository.save(
 				new OrderItem(order.getId(), menu.getId(), menu.getName(), menu.getPrice(), quantity));
 
-		kafkaTemplate.send(KafkaProducerConfig.ORDER_EVENTS_TOPIC, OrderEvent.from(order, orderItem));
+		eventPublisher.publishEvent(OrderEvent.from(order, orderItem));
 
 		return new OrderResult(order, List.of(orderItem), balanceAfter);
 	}

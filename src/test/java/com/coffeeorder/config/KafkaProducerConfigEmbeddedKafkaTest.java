@@ -33,7 +33,8 @@ import com.coffeeorder.order.event.OrderEvent;
  * (SCRUM-62 / E4-2 태스크4, docs/design/jira-manual.md 171행).
  * <p>
  * 기존 {@link com.coffeeorder.order.service.OrderServiceTest}(Mockito
- * {@code verify(kafkaTemplate).send(...)})와
+ * {@code verify(eventPublisher).publishEvent(...)}, SCRUM-76부터 실제 Kafka 발행은
+ * {@link com.coffeeorder.order.event.OrderEventKafkaListener}가 {@code AFTER_COMMIT}에서 담당)와
  * {@link com.coffeeorder.order.event.OrderEventTest}(JSON 스키마 순수 단위 검증)는 각각 "발행 호출
  * 여부"와 "직렬화 결과"만 검증할 뿐, {@link KafkaProducerConfig#producerFactory()}가 실제로 구성한
  * {@link org.springframework.kafka.support.serializer.JsonSerializer}를 통해 브로커로 바이트가
