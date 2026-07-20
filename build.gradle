@@ -46,6 +46,22 @@ dependencies {
     // OrderService의 order-events 발행이 실제 Kafka 프로토콜 위에서 토픽명/JSON 스키마대로 나가는지
     // 인메모리 브로커(EmbeddedKafka)로 검증하기 위해 추가한다(SCRUM-62 / E4-2 태스크4).
     testImplementation 'org.springframework.kafka:spring-kafka-test'
+    // OrderService(주문/결제) 흐름을 가짜(H2/EmbeddedKafka/InMemoryRedisDistributedLock)가 아닌
+    // 실제 MySQL/Redis/Kafka 컨테이너 위에서 end-to-end로 검증하기 위해 추가한다(SCRUM-23 통합 테스트).
+    // 버전은 Spring Boot 4.1 BOM(testcontainers-bom 2.0.5 / com.redis:testcontainers-redis 2.2.4 /
+    // spring-boot-testcontainers 4.1.0)이 이미 관리하므로 명시하지 않는다.
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    testImplementation 'org.testcontainers:testcontainers-kafka'
+    testImplementation 'com.redis:testcontainers-redis'
+    // 위 Testcontainers 통합 테스트가 @SpringBootTest(webEnvironment = RANDOM_PORT)로 띄운 실제
+    // 내장 서버에 POST /api/orders를 실제 HTTP로 호출하기 위한 TestRestTemplate
+    // (spring-boot-starter-test에는 포함되지 않는 Spring Boot 4.1의 별도 모듈).
+    testImplementation 'org.springframework.boot:spring-boot-resttestclient'
+    // TestRestTemplateTestAutoConfiguration이 내부적으로 사용하는 RestTemplateBuilder 제공
+    // (spring-boot-starter-web은 서버 측 모듈만 가져오고 클라이언트 측인 이 모듈은 포함하지 않는다).
+    testImplementation 'org.springframework.boot:spring-boot-restclient'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testRuntimeOnly 'com.h2database:h2'
 }
