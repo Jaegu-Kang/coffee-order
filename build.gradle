@@ -23,6 +23,9 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-validation'
     implementation 'org.springframework.kafka:spring-kafka'
+    // 분산락 유틸(SCRUM-70 다음 서브태스크, point:{userId} 키)이 사용할 Redis 연결/템플릿 기반
+    // (Lettuce 클라이언트 포함, RedisConnectionFactory 자동 구성). 이번 티켓 범위는 의존성+RedisConfig까지.
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springframework.boot:spring-boot-flyway'
     implementation 'org.flywaydb:flyway-core'
     // KafkaProducerConfig가 order-events 발행에 사용하는 JsonSerializer/JacksonUtils.enhancedObjectMapper()는
