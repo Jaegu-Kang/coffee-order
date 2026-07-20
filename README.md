@@ -234,6 +234,10 @@ erDiagram
 - **판별 기준**: L1(필수) — `./gradlew test`의 `contextLoads`가 통과하면 H2 기준 애플리케이션
   컨텍스트(JPA/Kafka/validation 포함) 기동은 검증된 것으로 간주한다. L2(조건부) — 위 MySQL
   전제조건이 갖춰진 환경에서만 `./gradlew bootRun`으로 dev 기동을 추가 확인한다.
+- **Testcontainers 통합 테스트와의 관계**: `OrderServiceTestcontainersIntegrationTest`(§8)는
+  `@Testcontainers(disabledWithoutDocker = true)`로 Docker가 없는 환경에서는 클래스 전체가
+  스킵되므로, 이 절의 "인프라 없이 `./gradlew test` 통과" 불변식은 이 테스트가 추가된 이후에도
+  그대로 유지된다.
 
 ---
 
@@ -244,6 +248,13 @@ erDiagram
   정확한지 검증(분실 갱신 없음). 재고성 자원 없이 포인트 정합성에 집중.
 - **슬라이스**: 컨트롤러(`@WebMvcTest`) — 상태 코드·검증·에러 코드 계약.
 - **통합**: `@SpringBootTest` + Testcontainers(MySQL/Redis/Kafka) 또는 임베디드 대체.
+  `src/test/java/com/coffeeorder/order/service/OrderServiceTestcontainersIntegrationTest.java`가
+  실제 MySQL(`mysql:8.0`)/Kafka(`apache/kafka:3.7.0`)/Redis(`redis:7-alpine`) 컨테이너 위에서
+  `POST /api/orders`부터 Outbox 릴레이(`OutboxRelay`)를 거쳐 `order-events` 실제 발행·소비까지
+  end-to-end로 검증한다(`@Testcontainers(disabledWithoutDocker = true)`로 Docker 미가용 환경에서는
+  스킵, §7.1 참고). 그 외 `OrderServiceOutboxTest`/`OrderServiceAtomicityTest`/
+  `OrderServiceConcurrencyTest` 등은 `@DataJpaTest` + H2 + `InMemoryRedisDistributedLock` 대역으로
+  서비스 로직 자체를 빠르게 검증하는 "임베디드 대체" 쪽에 해당한다.
 - **이벤트**: 결제 성공 시에만 `order-events` 발행되는지, 실패(롤백) 시 미발행 검증.
 
 ---

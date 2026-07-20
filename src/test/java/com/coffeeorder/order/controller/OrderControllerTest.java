@@ -122,4 +122,15 @@ class OrderControllerTest {
 				.andExpect(status().isConflict())
 				.andExpect(jsonPath("$.code").value("INSUFFICIENT_POINT"));
 	}
+
+	@Test
+	void order_동시성_충돌이_발생하면_409_CONCURRENCY_CONFLICT를_응답한다() throws Exception {
+		when(orderService.order(any())).thenThrow(new BusinessException(ErrorCode.CONCURRENCY_CONFLICT));
+
+		mockMvc.perform(post("/api/orders")
+				.contentType(MediaType.APPLICATION_JSON)
+				.content("{\"userId\":1,\"menuId\":2,\"quantity\":1}"))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.code").value("CONCURRENCY_CONFLICT"));
+	}
 }

@@ -140,6 +140,18 @@ class PointServiceTest {
 	}
 
 	@Test
+	void charge_amount가_null이면_INVALID_AMOUNT_예외가_발생한다() {
+		PointService pointService = new PointService(
+				userRepository, pointBalanceRepository, pointHistoryRepository, redisDistributedLock);
+
+		assertThatThrownBy(() -> pointService.charge(1L, null))
+				.isInstanceOf(BusinessException.class)
+				.satisfies(e -> assertThat(((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.INVALID_AMOUNT));
+
+		verifyNoInteractions(userRepository, pointBalanceRepository, pointHistoryRepository, redisDistributedLock);
+	}
+
+	@Test
 	void charge_락_획득에_실패하면_CONCURRENCY_CONFLICT_예외가_발생하고_DB_로직은_실행되지_않는다() {
 		Long userId = 1L;
 		when(userRepository.existsById(userId)).thenReturn(true);
