@@ -1,5 +1,6 @@
 package com.coffeeorder.order.service;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -10,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.coffeeorder.common.exception.BusinessException;
 import com.coffeeorder.common.exception.ErrorCode;
+import com.coffeeorder.common.lock.RedisDistributedLock;
 import com.coffeeorder.config.KafkaProducerConfig;
 import com.coffeeorder.menu.entity.Menu;
 import com.coffeeorder.menu.repository.MenuRepository;
@@ -31,8 +33,11 @@ import com.coffeeorder.user.repository.UserRepository;
  * 1~2, 4~6단계(존재확인 → 총액 계산 → 포인트 차감/이력 기록 → 주문·주문항목 저장 →
  * {@code order-events} 토픽 발행)를 하나의 트랜잭션으로 처리한다(SCRUM-55, SCRUM-61).
  * <p>
- * 3단계(잔액 조회 시 비관적 락)·다중 인스턴스 동시 주문을 막는 Redis 분산락·발행-트랜잭션
- * 정합성 강화(AFTER_COMMIT/Outbox)는 도전 과제(E6) 범위이며 이번 티켓에서는 다루지 않는다
+ * 3단계(잔액 조회~차감~{@code USE} 이력 기록)는 {@code point:{userId}} 키의 Redis
+ * 분산락({@link RedisDistributedLock})으로 다중 인스턴스 간 직렬화하고, 그 안에서
+ * {@link PointBalanceRepository#findByIdForUpdate(Long)}로 비관적 락 조회를 수행해 동일
+ * 인스턴스 내 동시 요청도 직렬화한다(SCRUM-73 / E6-2 태스크4). 발행-트랜잭션 정합성 강화
+ * (AFTER_COMMIT/Outbox)는 별도 도전 과제(E6-3) 범위이며 이번 티켓에서는 다루지 않는다
  * (docs/design/jira-backlog.md). 즉 이번 발행은 커밋 이전(트랜잭션 내부) 동기 발행이다.
  */
 @Service
@@ -40,6 +45,9 @@ import com.coffeeorder.user.repository.UserRepository;
 public class OrderService {
 
 	private static final int DEFAULT_QUANTITY = 1;
+	private static final String POINT_LOCK_KEY_PREFIX = "point:";
+	private static final Duration LOCK_WAIT_TIME = Duration.ofSeconds(3);
+	private static final Duration LOCK_LEASE_TIME = Duration.ofSeconds(5);
 
 	private final OrderRepository orderRepository;
 	private final OrderItemRepository orderItemRepository;
@@ -48,6 +56,7 @@ public class OrderService {
 	private final PointBalanceRepository pointBalanceRepository;
 	private final PointHistoryRepository pointHistoryRepository;
 	private final KafkaTemplate<String, Object> kafkaTemplate;
+	private final RedisDistributedLock redisDistributedLock;
 
 	public OrderService(OrderRepository orderRepository,
 			OrderItemRepository orderItemRepository,
@@ -55,7 +64,8 @@ public class OrderService {
 			MenuRepository menuRepository,
 			PointBalanceRepository pointBalanceRepository,
 			PointHistoryRepository pointHistoryRepository,
-			KafkaTemplate<String, Object> kafkaTemplate) {
+			KafkaTemplate<String, Object> kafkaTemplate,
+			RedisDistributedLock redisDistributedLock) {
 		this.orderRepository = orderRepository;
 		this.orderItemRepository = orderItemRepository;
 		this.userRepository = userRepository;
@@ -63,6 +73,7 @@ public class OrderService {
 		this.pointBalanceRepository = pointBalanceRepository;
 		this.pointHistoryRepository = pointHistoryRepository;
 		this.kafkaTemplate = kafkaTemplate;
+		this.redisDistributedLock = redisDistributedLock;
 	}
 
 	@Transactional
@@ -79,16 +90,21 @@ public class OrderService {
 
 		long totalAmount = menu.getPrice() * quantity;
 
-		PointBalance pointBalance = pointBalanceRepository.findById(userId)
-				.orElseGet(() -> new PointBalance(userId, 0L));
-		if (pointBalance.getBalance() < totalAmount) {
-			throw new BusinessException(ErrorCode.INSUFFICIENT_POINT);
-		}
+		Long balanceAfter = redisDistributedLock.executeWithLock(
+				POINT_LOCK_KEY_PREFIX + userId, LOCK_WAIT_TIME, LOCK_LEASE_TIME, () -> {
+					PointBalance pointBalance = pointBalanceRepository.findByIdForUpdate(userId)
+							.orElseGet(() -> new PointBalance(userId, 0L));
+					if (pointBalance.getBalance() < totalAmount) {
+						throw new BusinessException(ErrorCode.INSUFFICIENT_POINT);
+					}
 
-		pointBalance.deduct(totalAmount);
-		pointBalanceRepository.save(pointBalance);
-		pointHistoryRepository.save(
-				new PointHistory(userId, PointHistory.TYPE_USE, totalAmount, pointBalance.getBalance()));
+					pointBalance.deduct(totalAmount);
+					pointBalanceRepository.save(pointBalance);
+					pointHistoryRepository.save(
+							new PointHistory(userId, PointHistory.TYPE_USE, totalAmount, pointBalance.getBalance()));
+
+					return pointBalance.getBalance();
+				});
 
 		LocalDateTime orderedAt = LocalDateTime.now(ZoneOffset.UTC);
 		Order order = orderRepository.save(new Order(userId, totalAmount, OrderStatus.PAID, orderedAt));
@@ -98,6 +114,6 @@ public class OrderService {
 
 		kafkaTemplate.send(KafkaProducerConfig.ORDER_EVENTS_TOPIC, OrderEvent.from(order, orderItem));
 
-		return new OrderResult(order, List.of(orderItem), pointBalance.getBalance());
+		return new OrderResult(order, List.of(orderItem), balanceAfter);
 	}
 }

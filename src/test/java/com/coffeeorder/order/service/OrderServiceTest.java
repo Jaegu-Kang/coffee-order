@@ -3,12 +3,18 @@ package com.coffeeorder.order.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.time.ZoneOffset;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,6 +26,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import com.coffeeorder.common.exception.BusinessException;
 import com.coffeeorder.common.exception.ErrorCode;
+import com.coffeeorder.common.lock.RedisDistributedLock;
 import com.coffeeorder.config.KafkaProducerConfig;
 import com.coffeeorder.menu.entity.Menu;
 import com.coffeeorder.menu.repository.MenuRepository;
@@ -60,9 +67,20 @@ class OrderServiceTest {
 	@Mock
 	private KafkaTemplate<String, Object> kafkaTemplate;
 
+	@Mock
+	private RedisDistributedLock redisDistributedLock;
+
 	private OrderService orderService() {
 		return new OrderService(orderRepository, orderItemRepository, userRepository, menuRepository,
-				pointBalanceRepository, pointHistoryRepository, kafkaTemplate);
+				pointBalanceRepository, pointHistoryRepository, kafkaTemplate, redisDistributedLock);
+	}
+
+	/** {@code executeWithLock}이 실제 락 없이 콜백({@code Supplier})을 즉시 실행하도록 스텁한다. */
+	@SuppressWarnings("unchecked")
+	private void stubLockToRunImmediately() {
+		lenient()
+				.when(redisDistributedLock.executeWithLock(anyString(), any(Duration.class), any(Duration.class), any()))
+				.thenAnswer(invocation -> invocation.getArgument(3, Supplier.class).get());
 	}
 
 	private Menu menu(Long id, String name, Long price) {
@@ -78,7 +96,8 @@ class OrderServiceTest {
 		PointBalance balance = new PointBalance(userId, 10000L);
 		when(userRepository.existsById(userId)).thenReturn(true);
 		when(menuRepository.findById(2L)).thenReturn(Optional.of(latte));
-		when(pointBalanceRepository.findById(userId)).thenReturn(Optional.of(balance));
+		when(pointBalanceRepository.findByIdForUpdate(userId)).thenReturn(Optional.of(balance));
+		stubLockToRunImmediately();
 		when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> {
 			Order order = invocation.getArgument(0);
 			ReflectionTestUtils.setField(order, "id", 1001L);
@@ -98,6 +117,10 @@ class OrderServiceTest {
 		assertThat(result.getOrderItems().get(0).getMenuName()).isEqualTo("카페라떼");
 		assertThat(result.getOrderItems().get(0).getUnitPrice()).isEqualTo(3500L);
 		assertThat(result.getOrderItems().get(0).getQuantity()).isEqualTo(2);
+
+		verify(pointBalanceRepository, never()).findById(userId);
+		verify(redisDistributedLock, times(1))
+				.executeWithLock(eq("point:" + userId), any(Duration.class), any(Duration.class), any());
 
 		ArgumentCaptor<PointHistory> historyCaptor = ArgumentCaptor.forClass(PointHistory.class);
 		verify(pointHistoryRepository).save(historyCaptor.capture());
@@ -126,7 +149,8 @@ class OrderServiceTest {
 		PointBalance balance = new PointBalance(userId, 10000L);
 		when(userRepository.existsById(userId)).thenReturn(true);
 		when(menuRepository.findById(2L)).thenReturn(Optional.of(latte));
-		when(pointBalanceRepository.findById(userId)).thenReturn(Optional.of(balance));
+		when(pointBalanceRepository.findByIdForUpdate(userId)).thenReturn(Optional.of(balance));
+		stubLockToRunImmediately();
 		when(orderRepository.save(any(Order.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		when(orderItemRepository.save(any(OrderItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -188,7 +212,8 @@ class OrderServiceTest {
 		PointBalance balance = new PointBalance(userId, 1000L);
 		when(userRepository.existsById(userId)).thenReturn(true);
 		when(menuRepository.findById(2L)).thenReturn(Optional.of(latte));
-		when(pointBalanceRepository.findById(userId)).thenReturn(Optional.of(balance));
+		when(pointBalanceRepository.findByIdForUpdate(userId)).thenReturn(Optional.of(balance));
+		stubLockToRunImmediately();
 
 		OrderCreateRequest request = new OrderCreateRequest(userId, 2L, 1);
 
@@ -208,7 +233,8 @@ class OrderServiceTest {
 		Menu latte = menu(2L, "카페라떼", 3500L);
 		when(userRepository.existsById(userId)).thenReturn(true);
 		when(menuRepository.findById(2L)).thenReturn(Optional.of(latte));
-		when(pointBalanceRepository.findById(userId)).thenReturn(Optional.empty());
+		when(pointBalanceRepository.findByIdForUpdate(userId)).thenReturn(Optional.empty());
+		stubLockToRunImmediately();
 
 		OrderCreateRequest request = new OrderCreateRequest(userId, 2L, 1);
 
@@ -216,5 +242,26 @@ class OrderServiceTest {
 				.isInstanceOf(BusinessException.class)
 				.extracting(exception -> ((BusinessException) exception).getErrorCode())
 				.isEqualTo(ErrorCode.INSUFFICIENT_POINT);
+	}
+
+	@Test
+	void order_락_획득에_실패하면_CONCURRENCY_CONFLICT_예외가_발생하고_DB_로직은_실행되지_않는다() {
+		Long userId = 1L;
+		Menu latte = menu(2L, "카페라떼", 3500L);
+		when(userRepository.existsById(userId)).thenReturn(true);
+		when(menuRepository.findById(2L)).thenReturn(Optional.of(latte));
+		when(redisDistributedLock.executeWithLock(eq("point:" + userId), any(Duration.class), any(Duration.class), any()))
+				.thenThrow(new BusinessException(ErrorCode.CONCURRENCY_CONFLICT));
+
+		OrderCreateRequest request = new OrderCreateRequest(userId, 2L, 1);
+
+		assertThatThrownBy(() -> orderService().order(request))
+				.isInstanceOf(BusinessException.class)
+				.extracting(exception -> ((BusinessException) exception).getErrorCode())
+				.isEqualTo(ErrorCode.CONCURRENCY_CONFLICT);
+
+		verify(pointBalanceRepository, never()).findByIdForUpdate(any());
+		verify(orderRepository, never()).save(any());
+		verify(kafkaTemplate, never()).send(any(), any());
 	}
 }
